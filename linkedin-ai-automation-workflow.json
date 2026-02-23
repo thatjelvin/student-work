@@ -1,0 +1,656 @@
+{
+  "name": "LinkedIn AI Automation Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "triggerAtDay": [1, 4],
+              "triggerAtHour": 9,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.tavily.com/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"api_key\": \"{{ $env.TAVILY_API_KEY }}\",\n  \"query\": \"latest AI breakthroughs and cutting-edge developments\",\n  \"max_results\": 5\n}",
+        "options": {}
+      },
+      "id": "tavily-search",
+      "name": "Tavily Web Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "model": "={{ $env.OPENAI_MODEL }}",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are a professional LinkedIn content writer. Your task is to write one professional LinkedIn post based on the provided AI research summaries. Follow these rules strictly:\n- Start with a compelling hook to grab attention\n- Extract one to two key insights from the research\n- Use a professional LinkedIn tone\n- Include two to four emojis maximum\n- End with three to five relevant hashtags\n- Return only the post text with no extra formatting or explanations"
+            },
+            {
+              "role": "user",
+              "content": "=Based on these AI research summaries, write a LinkedIn post:\n\n{{ $json.results.map(r => `Title: ${r.title}\\nSummary: ${r.content}\\nURL: ${r.url}`).join('\\n\\n') }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ai-content-writer",
+      "name": "AI Content Writer",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [440, 300],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-credentials",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const postText = $input.first().json.message.content;\nreturn [\n  { json: { postText: postText, branch: 'preserve' } },\n  { json: { postText: postText, branch: 'extract' } }\n];"
+      },
+      "id": "split-branches",
+      "name": "Split Branches",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-preserve",
+              "leftValue": "={{ $json.branch }}",
+              "rightValue": "preserve",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "route-preserve",
+      "name": "Route Preserve",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [880, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-extract",
+              "leftValue": "={{ $json.branch }}",
+              "rightValue": "extract",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "route-extract",
+      "name": "Route Extract",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [880, 400]
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "model": "={{ $env.OPENAI_MODEL }}",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Extract a single concise topic phrase from the given LinkedIn post. The topic must be suitable for image generation and should not be a full sentence. Return only the topic phrase, nothing else."
+            },
+            {
+              "role": "user",
+              "content": "={{ $json.postText }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "topic-extraction",
+      "name": "Topic Extraction",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [1100, 400],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-credentials",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "model": "={{ $env.OPENAI_MODEL }}",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are an expert at creating image generation prompts. Generate a professional image generation prompt based on the given topic. The style must be clean, modern, and tech-focused. The image must be suitable for LinkedIn feed display. Return only the prompt text, nothing else."
+            },
+            {
+              "role": "user",
+              "content": "={{ $json.message.content }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "image-prompt-generator",
+      "name": "Image Prompt Generator",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [1320, 400],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-credentials",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "image",
+        "operation": "generate",
+        "model": "dall-e-3",
+        "prompt": "={{ $json.message.content }}",
+        "options": {
+          "size": "1024x1024",
+          "quality": "standard",
+          "style": "natural"
+        }
+      },
+      "id": "image-generation",
+      "name": "Image Generation",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [1540, 400],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-credentials",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "assign-post",
+              "name": "postText",
+              "value": "={{ $json.postText }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "preserve-post-text",
+      "name": "Preserve Post Text",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1100, 200]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineAll",
+        "options": {}
+      },
+      "id": "merge-branches",
+      "name": "Merge Branches",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1760, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "assign-merged-post",
+              "name": "postText",
+              "value": "={{ $('Preserve Post Text').item.json.postText }}",
+              "type": "string"
+            },
+            {
+              "id": "assign-merged-image",
+              "name": "imageUrl",
+              "value": "={{ $('Image Generation').item.json.data[0].url }}",
+              "type": "string"
+            },
+            {
+              "id": "assign-topic",
+              "name": "imageTopic",
+              "value": "={{ $('Topic Extraction').item.json.message.content }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "prepare-publish-data",
+      "name": "Prepare Publish Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1980, 300]
+    },
+    {
+      "parameters": {
+        "unit": "hours",
+        "amount": 48
+      },
+      "id": "wait-48-hours",
+      "name": "Wait 48 Hours",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [2200, 300],
+      "webhookId": "wait-webhook-id"
+    },
+    {
+      "parameters": {
+        "person": "={{ $env.LINKEDIN_PERSON_URN }}",
+        "text": "={{ $json.postText }}",
+        "mediaCategory": "IMAGE",
+        "additionalFields": {
+          "imageUrl": "={{ $json.imageUrl }}"
+        }
+      },
+      "id": "linkedin-publish",
+      "name": "LinkedIn Publish",
+      "type": "n8n-nodes-base.linkedIn",
+      "typeVersion": 1,
+      "position": [2420, 300],
+      "credentials": {
+        "linkedInOAuth2Api": {
+          "id": "linkedin-oauth2-credentials",
+          "name": "LinkedIn OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.GOOGLE_SHEETS_DOC_ID }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "={{ $env.GOOGLE_SHEETS_SHEET_NAME }}",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Timestamp": "={{ $now.toISO() }}",
+            "Topic": "={{ $json.imageTopic }}",
+            "PostText": "={{ $json.postText }}",
+            "Status": "Published"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Timestamp",
+              "displayName": "Timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string"
+            },
+            {
+              "id": "Topic",
+              "displayName": "Topic",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string"
+            },
+            {
+              "id": "PostText",
+              "displayName": "PostText",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string"
+            },
+            {
+              "id": "Status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "log-to-sheets",
+      "name": "Log to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [2640, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-credentials",
+          "name": "Google Sheets OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "error-trigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [0, 600]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "error-node",
+              "name": "failedNode",
+              "value": "={{ $json.execution.error.node.name }}",
+              "type": "string"
+            },
+            {
+              "id": "error-message",
+              "name": "errorMessage",
+              "value": "={{ $json.execution.error.message }}",
+              "type": "string"
+            },
+            {
+              "id": "error-timestamp",
+              "name": "timestamp",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "prepare-error-data",
+      "name": "Prepare Error Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 600]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $env.ALERT_EMAIL }}",
+        "subject": "n8n Workflow Error: LinkedIn AI Automation",
+        "message": "=Workflow Error Alert\n\nFailed Node: {{ $json.failedNode }}\nError Message: {{ $json.errorMessage }}\nTimestamp: {{ $json.timestamp }}\n\nPlease investigate and resolve the issue."
+      },
+      "id": "send-error-email",
+      "name": "Send Error Alert",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [440, 600],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-credentials",
+          "name": "SMTP"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Tavily Web Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tavily Web Search": {
+      "main": [
+        [
+          {
+            "node": "AI Content Writer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Content Writer": {
+      "main": [
+        [
+          {
+            "node": "Split Branches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Branches": {
+      "main": [
+        [
+          {
+            "node": "Route Preserve",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Route Extract",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Preserve": {
+      "main": [
+        [
+          {
+            "node": "Preserve Post Text",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Route Extract": {
+      "main": [
+        [
+          {
+            "node": "Topic Extraction",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Topic Extraction": {
+      "main": [
+        [
+          {
+            "node": "Image Prompt Generator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Image Prompt Generator": {
+      "main": [
+        [
+          {
+            "node": "Image Generation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Image Generation": {
+      "main": [
+        [
+          {
+            "node": "Merge Branches",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Preserve Post Text": {
+      "main": [
+        [
+          {
+            "node": "Merge Branches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Branches": {
+      "main": [
+        [
+          {
+            "node": "Prepare Publish Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Publish Data": {
+      "main": [
+        [
+          {
+            "node": "Wait 48 Hours",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 48 Hours": {
+      "main": [
+        [
+          {
+            "node": "LinkedIn Publish",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LinkedIn Publish": {
+      "main": [
+        [
+          {
+            "node": "Log to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Prepare Error Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Error Data": {
+      "main": [
+        [
+          {
+            "node": "Send Error Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2026-01-19T08:01:20.000Z",
+  "versionId": "1"
+}

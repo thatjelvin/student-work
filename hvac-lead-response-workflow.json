@@ -1,0 +1,840 @@
+﻿{
+  "name": "HVAC Lead Instant Response Automation",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "hvac-lead-intake",
+        "options": {
+          "responseMode": "responseNode"
+        }
+      },
+      "id": "webhook-001",
+      "name": "Lead Intake Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 300],
+      "webhookId": "hvac-lead-intake-webhook"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "lead-id",
+              "name": "leadId",
+              "value": "={{ $json.body.leadId || $now.toMillis() + '_' + Math.random().toString(36).substr(2, 9) }}",
+              "type": "string"
+            },
+            {
+              "id": "cust-name",
+              "name": "customerName",
+              "value": "={{ ($json.body.customerName || $json.body.name || $json.body.customer_name || 'Valued Customer').trim() }}",
+              "type": "string"
+            },
+            {
+              "id": "phone",
+              "name": "phoneNumber",
+              "value": "={{ ($json.body.phone || $json.body.phoneNumber || $json.body.phone_number || '').replace(/[^0-9+]/g, '') }}",
+              "type": "string"
+            },
+            {
+              "id": "lead-src",
+              "name": "leadSource",
+              "value": "={{ $json.body.leadSource || $json.body.source || $json.body.lead_source || 'Website' }}",
+              "type": "string"
+            },
+            {
+              "id": "service",
+              "name": "serviceRequested",
+              "value": "={{ $json.body.service || $json.body.serviceRequested || $json.body.service_requested || 'General Inquiry' }}",
+              "type": "string"
+            },
+            {
+              "id": "timestamp",
+              "name": "receivedAt",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            },
+            {
+              "id": "formatted-time",
+              "name": "receivedAtFormatted",
+              "value": "={{ $now.toLocaleString() }}",
+              "type": "string"
+            },
+            {
+              "id": "has-phone",
+              "name": "hasValidPhone",
+              "value": "={{ ($json.body.phone || $json.body.phoneNumber || $json.body.phone_number || '').replace(/[^0-9]/g, '').length >= 10 }}",
+              "type": "boolean"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "normalize-002",
+      "name": "Normalize Lead Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.LEAD_API_URL }}/leads/check-duplicate",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"leadId\": \"{{ $json.leadId }}\",\n  \"phoneNumber\": \"{{ $json.phoneNumber }}\"\n}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "check-dup-003",
+      "name": "Check Duplicate Lead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "lead-api-cred",
+          "name": "Lead API Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "not-dup",
+              "leftValue": "={{ $json.isDuplicate }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "is-new-004",
+      "name": "Is New Lead",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [660, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.LEAD_API_URL }}/leads",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"leadId\": \"{{ $('Normalize Lead Data').item.json.leadId }}\",\n  \"customerName\": \"{{ $('Normalize Lead Data').item.json.customerName }}\",\n  \"phoneNumber\": \"{{ $('Normalize Lead Data').item.json.phoneNumber }}\",\n  \"leadSource\": \"{{ $('Normalize Lead Data').item.json.leadSource }}\",\n  \"serviceRequested\": \"{{ $('Normalize Lead Data').item.json.serviceRequested }}\",\n  \"receivedAt\": \"{{ $('Normalize Lead Data').item.json.receivedAt }}\",\n  \"status\": \"new\"\n}",
+        "options": {}
+      },
+      "id": "store-lead-005",
+      "name": "Store Lead Record",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "lead-api-cred",
+          "name": "Lead API Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-phone",
+              "leftValue": "={{ $('Normalize Lead Data').item.json.hasValidPhone }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-phone-006",
+      "name": "Has Valid Phone",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1100, 300]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "from": "={{ $env.TWILIO_PHONE_NUMBER }}",
+        "to": "={{ $('Normalize Lead Data').item.json.phoneNumber }}",
+        "message": "=Hi {{ $('Normalize Lead Data').item.json.customerName }},\n\nThank you for contacting us! We received your request for {{ $('Normalize Lead Data').item.json.serviceRequested }}.\n\nOne of our team members will call you shortly to discuss your needs and schedule service.\n\nIf urgent, call us directly at {{ $env.OFFICE_PHONE }}.\n\n- The Team"
+      },
+      "id": "send-sms-007",
+      "name": "Send Customer SMS",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [1320, 200],
+      "credentials": {
+        "twilioApi": {
+          "id": "twilio-cred",
+          "name": "Twilio API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.LEAD_API_URL }}/leads/{{ $('Normalize Lead Data').item.json.leadId }}/sms-sent",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"smsSentAt\": \"{{ $now.toISO() }}\",\n  \"messageSid\": \"{{ $json.sid }}\"\n}",
+        "options": {}
+      },
+      "id": "log-sms-008",
+      "name": "Log SMS Sent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 200],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "lead-api-cred",
+          "name": "Lead API Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "={{ $env.SLACK_LEADS_CHANNEL }}",
+          "mode": "id"
+        },
+        "text": "=:rotating_light: *NEW LEAD - IMMEDIATE ACTION REQUIRED* :rotating_light:",
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        },
+        "attachments": [
+          {
+            "color": "#ff6b00",
+            "pretext": "",
+            "title": "Lead Details",
+            "fields": {
+              "item": [
+                {
+                  "title": "Customer",
+                  "value": "={{ $('Normalize Lead Data').item.json.customerName }}",
+                  "short": true
+                },
+                {
+                  "title": "Phone",
+                  "value": "={{ $('Normalize Lead Data').item.json.phoneNumber || 'Not provided' }}",
+                  "short": true
+                },
+                {
+                  "title": "Service",
+                  "value": "={{ $('Normalize Lead Data').item.json.serviceRequested }}",
+                  "short": true
+                },
+                {
+                  "title": "Source",
+                  "value": "={{ $('Normalize Lead Data').item.json.leadSource }}",
+                  "short": true
+                },
+                {
+                  "title": "Received",
+                  "value": "={{ $('Normalize Lead Data').item.json.receivedAtFormatted }}",
+                  "short": false
+                }
+              ]
+            }
+          }
+        ],
+        "blocksUi": {
+          "blocksValues": [
+            {
+              "type": "section",
+              "text": {
+                "type": "mrkdwn",
+                "text": ":rotating_light: *NEW LEAD - IMMEDIATE ACTION REQUIRED* :rotating_light:"
+              }
+            },
+            {
+              "type": "section",
+              "fields": [
+                {
+                  "type": "mrkdwn",
+                  "text": "*Customer:*\n{{ $('Normalize Lead Data').item.json.customerName }}"
+                },
+                {
+                  "type": "mrkdwn",
+                  "text": "*Phone:*\n{{ $('Normalize Lead Data').item.json.phoneNumber || 'Not provided' }}"
+                },
+                {
+                  "type": "mrkdwn",
+                  "text": "*Service:*\n{{ $('Normalize Lead Data').item.json.serviceRequested }}"
+                },
+                {
+                  "type": "mrkdwn",
+                  "text": "*Source:*\n{{ $('Normalize Lead Data').item.json.leadSource }}"
+                }
+              ]
+            },
+            {
+              "type": "section",
+              "text": {
+                "type": "mrkdwn",
+                "text": "*Received:* {{ $('Normalize Lead Data').item.json.receivedAtFormatted }}"
+              }
+            },
+            {
+              "type": "actions",
+              "elements": [
+                {
+                  "type": "button",
+                  "text": {
+                    "type": "plain_text",
+                    "text": ":white_check_mark: CLAIM THIS JOB",
+                    "emoji": true
+                  },
+                  "style": "primary",
+                  "url": "{{ $env.N8N_WEBHOOK_BASE_URL }}/webhook/claim-lead?leadId={{ $('Normalize Lead Data').item.json.leadId }}"
+                },
+                {
+                  "type": "button",
+                  "text": {
+                    "type": "plain_text",
+                    "text": ":phone: Call Customer",
+                    "emoji": true
+                  },
+                  "url": "tel:{{ $('Normalize Lead Data').item.json.phoneNumber }}"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "id": "slack-notify-009",
+      "name": "Notify Team Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [1760, 300],
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "slack-cred",
+          "name": "Slack OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"success\": true,\n  \"message\": \"Lead received and processed\",\n  \"leadId\": \"{{ $('Normalize Lead Data').item.json.leadId }}\"\n}",
+        "options": {}
+      },
+      "id": "respond-ok-010",
+      "name": "Respond Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1980, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"success\": true,\n  \"message\": \"Duplicate lead - already processed\",\n  \"leadId\": \"{{ $('Normalize Lead Data').item.json.leadId }}\"\n}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "respond-dup-011",
+      "name": "Respond Duplicate",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [880, 500]
+    },
+    {
+      "parameters": {},
+      "id": "merge-012",
+      "name": "Merge Paths",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1540, 350]
+    },
+    {
+      "parameters": {
+        "httpMethod": "=GET",
+        "path": "claim-lead",
+        "options": {
+          "responseMode": "responseNode"
+        }
+      },
+      "id": "claim-webhook-013",
+      "name": "Claim Job Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 700],
+      "webhookId": "claim-lead-webhook"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "claim-lead-id",
+              "name": "leadId",
+              "value": "={{ $json.query.leadId }}",
+              "type": "string"
+            },
+            {
+              "id": "claimer-id",
+              "name": "claimedBy",
+              "value": "={{ $json.query.userId || $json.headers['x-slack-user-id'] || 'unknown' }}",
+              "type": "string"
+            },
+            {
+              "id": "claim-time",
+              "name": "claimedAt",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "parse-claim-014",
+      "name": "Parse Claim Request",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 700]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.LEAD_API_URL }}/leads/{{ $json.leadId }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "get-lead-015",
+      "name": "Get Lead Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 700],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "lead-api-cred",
+          "name": "Lead API Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "not-claimed",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "claimed",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-claimed-016",
+      "name": "Not Already Claimed",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [660, 700]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.LEAD_API_URL }}/leads/{{ $('Parse Claim Request').item.json.leadId }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"status\": \"claimed\",\n  \"claimedBy\": \"{{ $('Parse Claim Request').item.json.claimedBy }}\",\n  \"claimedAt\": \"{{ $('Parse Claim Request').item.json.claimedAt }}\"\n}",
+        "options": {}
+      },
+      "id": "update-claimed-017",
+      "name": "Update Lead Claimed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 600],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "lead-api-cred",
+          "name": "Lead API Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "={{ $env.SLACK_LEADS_CHANNEL }}",
+          "mode": "id"
+        },
+        "text": "=:white_check_mark: *LEAD CLAIMED*\n\nLead *{{ $('Parse Claim Request').item.json.leadId }}* has been claimed by <@{{ $('Parse Claim Request').item.json.claimedBy }}>.\n\nCustomer: {{ $json.customerName }}\nPhone: {{ $json.phoneNumber }}",
+        "otherOptions": {}
+      },
+      "id": "slack-claimed-018",
+      "name": "Notify Lead Claimed",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [1100, 600],
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "slack-cred",
+          "name": "Slack OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "=Success! You have claimed the lead for {{ $('Get Lead Status').item.json.customerName }}. Please contact them at {{ $('Get Lead Status').item.json.phoneNumber }} immediately.",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "respond-claimed-019",
+      "name": "Respond Claim Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1320, 600]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "=This lead has already been claimed by another team member. Please check Slack for details.",
+        "options": {
+          "responseCode": 409
+        }
+      },
+      "id": "respond-already-020",
+      "name": "Respond Already Claimed",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [880, 850]
+    },
+    {
+      "parameters": {},
+      "id": "noop-skip-021",
+      "name": "Skip SMS No Phone",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1320, 400]
+    },
+    {
+      "parameters": {},
+      "id": "error-trigger-022",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [0, 1050]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "={{ $env.SLACK_ALERTS_CHANNEL }}",
+          "mode": "id"
+        },
+        "text": "=:warning: *WORKFLOW ERROR*\n\nNode: {{ $json.execution.error.node.name }}\nError: {{ $json.execution.error.message }}\nTime: {{ $now.toLocaleString() }}",
+        "otherOptions": {}
+      },
+      "id": "slack-error-023",
+      "name": "Alert Error Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [220, 1050],
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "slack-cred",
+          "name": "Slack OAuth2"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Lead Intake Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize Lead Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Lead Data": {
+      "main": [
+        [
+          {
+            "node": "Check Duplicate Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Duplicate Lead": {
+      "main": [
+        [
+          {
+            "node": "Is New Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is New Lead": {
+      "main": [
+        [
+          {
+            "node": "Store Lead Record",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Lead Record": {
+      "main": [
+        [
+          {
+            "node": "Has Valid Phone",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Valid Phone": {
+      "main": [
+        [
+          {
+            "node": "Send Customer SMS",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Skip SMS No Phone",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Customer SMS": {
+      "main": [
+        [
+          {
+            "node": "Log SMS Sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log SMS Sent": {
+      "main": [
+        [
+          {
+            "node": "Merge Paths",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip SMS No Phone": {
+      "main": [
+        [
+          {
+            "node": "Merge Paths",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Paths": {
+      "main": [
+        [
+          {
+            "node": "Notify Team Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Team Slack": {
+      "main": [
+        [
+          {
+            "node": "Respond Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim Job Webhook": {
+      "main": [
+        [
+          {
+            "node": "Parse Claim Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Claim Request": {
+      "main": [
+        [
+          {
+            "node": "Get Lead Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Lead Status": {
+      "main": [
+        [
+          {
+            "node": "Not Already Claimed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Not Already Claimed": {
+      "main": [
+        [
+          {
+            "node": "Update Lead Claimed",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Already Claimed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Lead Claimed": {
+      "main": [
+        [
+          {
+            "node": "Notify Lead Claimed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Lead Claimed": {
+      "main": [
+        [
+          {
+            "node": "Respond Claim Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Alert Error Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 3,
+  "versionId": "1"
+}

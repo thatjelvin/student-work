@@ -1,0 +1,838 @@
+{
+  "name": "Instagram Wallpaper Automation - Daily 9-Image Carousel",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 24,
+              "triggerAtHour": 10
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger-001",
+      "name": "Daily Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.THEME_MEMORY_URL || 'https://your-storage.com/theme-memory.json' }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "fetch-memory-002",
+      "name": "Fetch Theme Memory",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nlet recentThemes = [];\n\ntry {\n  if (response && response.themes) {\n    recentThemes = response.themes.slice(-30);\n  }\n} catch (e) {\n  recentThemes = [];\n}\n\nconst formattedMemory = recentThemes.length > 0 \n  ? recentThemes.map((t, i) => `${i + 1}. ${t.theme} (${t.date})`).join('\\n')\n  : 'No previous themes recorded.';\n\nreturn [{\n  json: {\n    recentThemes: recentThemes,\n    formattedMemory: formattedMemory,\n    themeCount: recentThemes.length,\n    todayDate: new Date().toISOString().split('T')[0]\n  }\n}];"
+      },
+      "id": "parse-memory-003",
+      "name": "Parse Theme Memory",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "options": {
+          "temperature": 0.9
+        },
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You generate ONE Unsplash search query per day for aesthetic phone wallpapers.\n\nALLOWED CATEGORIES ONLY:\n- Minimal landscapes (desert, horizon, sea)\n- Moody nature (fog, rain, mist, storm clouds)\n- Mountains, forests, valleys\n- Architecture without people (brutalist, minimal, geometric)\n- Abstract textures (marble, stone, water ripples, sand patterns)\n- Dark/cinematic scenery (night sky, silhouettes, shadows)\n- Botanical close-ups (leaves, flowers, plants)\n- Ocean, waves, underwater\n- Snow, ice, winter scenes\n\nSTRICT RULES:\n1. Output ONLY a plain text search query (no quotes, no explanation)\n2. Query must be 2-5 words maximum\n3. NEVER repeat or closely resemble any theme from the memory list\n4. NEVER include: people, faces, crowds, text, logos, brands, AI art, illustrations\n5. Bias toward moody, calm, atmospheric aesthetics\n6. Query must work well for PORTRAIT orientation images\n\nExamples of good queries:\nfoggy mountain forest\nminimal desert dunes\nocean waves moody\nabstract marble texture\nbrutal concrete architecture\nmisty pine trees\ndark stormy clouds"
+            },
+            {
+              "role": "user",
+              "content": "=PREVIOUS THEMES (avoid these):\n{{ $json.formattedMemory }}\n\nGenerate ONE new unique search query for today ({{ $json.todayDate }}):"
+            }
+          ]
+        }
+      },
+      "id": "generate-theme-004",
+      "name": "Generate Daily Theme",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [660, 300],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-credentials",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const llmResponse = $input.first().json.message.content;\nconst memoryData = $('Parse Theme Memory').first().json;\n\nlet searchQuery = llmResponse.trim()\n  .replace(/[\"']/g, '')\n  .replace(/^query:\\s*/i, '')\n  .replace(/^search:\\s*/i, '')\n  .toLowerCase()\n  .trim();\n\nif (searchQuery.length > 50) {\n  searchQuery = searchQuery.substring(0, 50).trim();\n}\n\nif (!searchQuery || searchQuery.length < 3) {\n  const fallbacks = [\n    'foggy mountain landscape',\n    'minimal ocean waves',\n    'abstract dark texture',\n    'misty forest path',\n    'moody cloudy sky'\n  ];\n  searchQuery = fallbacks[Math.floor(Math.random() * fallbacks.length)];\n}\n\nreturn [{\n  json: {\n    searchQuery: searchQuery,\n    todayDate: memoryData.todayDate,\n    recentThemes: memoryData.recentThemes\n  }\n}];"
+      },
+      "id": "clean-query-005",
+      "name": "Clean Search Query",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.unsplash.com/search/photos",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "={{ $json.searchQuery }}"
+            },
+            {
+              "name": "per_page",
+              "value": "30"
+            },
+            {
+              "name": "orientation",
+              "value": "portrait"
+            },
+            {
+              "name": "content_filter",
+              "value": "high"
+            },
+            {
+              "name": "order_by",
+              "value": "relevant"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept-Version",
+              "value": "v1"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "search-unsplash-006",
+      "name": "Search Unsplash",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "unsplash-api-credentials",
+          "name": "Unsplash API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst results = response.results || [];\nconst searchQuery = $('Clean Search Query').first().json.searchQuery;\nconst todayDate = $('Clean Search Query').first().json.todayDate;\nconst recentThemes = $('Clean Search Query').first().json.recentThemes;\n\nconst validImages = results.filter(photo => {\n  if (!photo.urls || !photo.urls.raw) return false;\n  if (photo.width >= photo.height) return false;\n  const desc = (photo.description || '').toLowerCase() + ' ' + (photo.alt_description || '').toLowerCase();\n  const peopleKeywords = ['person', 'people', 'man', 'woman', 'portrait', 'face', 'crowd', 'human', 'model', 'selfie'];\n  if (peopleKeywords.some(kw => desc.includes(kw))) return false;\n  const badKeywords = ['logo', 'text', 'brand', 'advertisement', 'poster', 'sign', 'banner'];\n  if (badKeywords.some(kw => desc.includes(kw))) return false;\n  return true;\n});\n\nconst scored = validImages.map(photo => ({\n  id: photo.id,\n  imageUrl: photo.urls.raw + '&w=1080&h=1920&fit=crop&q=85',\n  fullUrl: photo.urls.full,\n  regularUrl: photo.urls.regular,\n  photographerName: photo.user.name || 'Unknown',\n  photographerUsername: photo.user.username || 'unknown',\n  description: photo.alt_description || photo.description || '',\n  width: photo.width,\n  height: photo.height,\n  color: photo.color,\n  likes: photo.likes || 0,\n  aspectRatio: photo.height / photo.width,\n  score: (photo.likes || 0) * 0.3 + (photo.height > 3000 ? 50 : 0) + (photo.height / photo.width > 1.5 ? 30 : 0)\n}));\n\nscored.sort((a, b) => b.score - a.score);\n\nconst selected = [];\nconst colorBuckets = new Map();\n\nfor (const img of scored) {\n  if (selected.length >= 9) break;\n  const colorKey = img.color ? img.color.substring(0, 4) : 'none';\n  const colorCount = colorBuckets.get(colorKey) || 0;\n  if (colorCount >= 3) continue;\n  const isDuplicate = selected.some(s => {\n    const descSim = s.description && img.description && \n      s.description.toLowerCase() === img.description.toLowerCase();\n    return descSim;\n  });\n  if (isDuplicate) continue;\n  selected.push(img);\n  colorBuckets.set(colorKey, colorCount + 1);\n}\n\nfor (const img of scored) {\n  if (selected.length >= 9) break;\n  if (!selected.find(s => s.id === img.id)) {\n    selected.push(img);\n  }\n}\n\nreturn [{\n  json: {\n    selectedImages: selected.slice(0, 9),\n    totalFound: validImages.length,\n    searchQuery: searchQuery,\n    todayDate: todayDate,\n    recentThemes: recentThemes,\n    hasEnoughImages: selected.length >= 9\n  }\n}];"
+      },
+      "id": "select-images-007",
+      "name": "Select 9 Images",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-nine-images",
+              "leftValue": "={{ $json.hasEnoughImages }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-images-008",
+      "name": "Has 9 Images",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1540, 300]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "options": {
+          "temperature": 0.7
+        },
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Generate an Instagram caption and hashtags for an aesthetic wallpaper carousel post.\n\nCAPTION RULES:\n- 1-2 short sentences maximum\n- Calm, minimal, atmospheric tone\n- No sales language or CTAs\n- Maximum 1-2 emojis (optional)\n- Evoke mood, not description\n\nHASHTAG RULES:\n- Provide exactly 12 hashtags\n- Mix of sizes: 4 large (500k+), 4 medium (50k-500k), 4 niche (under 50k)\n- Categories: wallpaper, aesthetic, photography, nature/architecture, mood\n- NO banned or spammy hashtags\n- NO hashtags with 'follow', 'like', 'f4f', 'l4l'\n\nCREDIT LINE:\n- Brief photographer credit for Unsplash\n\nOutput ONLY valid JSON:\n{\"caption\": \"your caption\", \"hashtags\": [\"tag1\", \"tag2\"], \"credit\": \"Photos via Unsplash\"}"
+            },
+            {
+              "role": "user",
+              "content": "=Theme: {{ $json.searchQuery }}\n\nPhotographers: {{ $json.selectedImages.map(img => img.photographerName).filter((v, i, a) => a.indexOf(v) === i).slice(0, 5).join(', ') }}"
+            }
+          ]
+        }
+      },
+      "id": "generate-caption-009",
+      "name": "Generate Caption",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [1760, 200],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-credentials",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const captionResponse = $input.first().json.message.content;\nconst prevData = $('Has 9 Images').first().json;\n\nlet parsed;\ntry {\n  const jsonMatch = captionResponse.match(/\\{[\\s\\S]*\\}/);\n  parsed = JSON.parse(jsonMatch ? jsonMatch[0] : captionResponse);\n} catch (e) {\n  parsed = {\n    caption: 'Stillness in every frame.',\n    hashtags: ['wallpaper', 'aesthetic', 'phonewallpaper', 'minimal', 'photography', 'moodygrams', 'nature', 'atmosphere', 'darkaesthetic', 'visualsoflife', 'artofvisuals', 'quietmoments'],\n    credit: 'Photos via Unsplash'\n  };\n}\n\nconst hashtags = (parsed.hashtags || []).slice(0, 15);\nconst hashtagString = hashtags.map(tag => tag.startsWith('#') ? tag : '#' + tag).join(' ');\n\nlet finalCaption = (parsed.caption || '').trim();\nfinalCaption += '\\n\\n' + hashtagString;\nif (parsed.credit) {\n  finalCaption += '\\n\\n' + parsed.credit;\n}\n\nreturn [{\n  json: {\n    finalCaption: finalCaption,\n    caption: parsed.caption,\n    hashtags: hashtags,\n    credit: parsed.credit,\n    selectedImages: prevData.selectedImages,\n    searchQuery: prevData.searchQuery,\n    todayDate: prevData.todayDate,\n    recentThemes: prevData.recentThemes\n  }\n}];"
+      },
+      "id": "format-caption-010",
+      "name": "Format Caption",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1980, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst images = data.selectedImages;\n\nreturn images.map((img, index) => ({\n  json: {\n    imageIndex: index,\n    imageUrl: img.imageUrl,\n    imageId: img.id,\n    photographerName: img.photographerName,\n    photographerUsername: img.photographerUsername,\n    finalCaption: data.finalCaption,\n    searchQuery: data.searchQuery,\n    todayDate: data.todayDate,\n    recentThemes: data.recentThemes,\n    totalImages: images.length\n  }\n}));"
+      },
+      "id": "split-images-011",
+      "name": "Split for Upload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2200, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v18.0/{{ $env.INSTAGRAM_BUSINESS_ACCOUNT_ID }}/media",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "image_url",
+              "value": "={{ $json.imageUrl }}"
+            },
+            {
+              "name": "is_carousel_item",
+              "value": "true"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 120000
+        }
+      },
+      "id": "upload-item-012",
+      "name": "Upload Carousel Item",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2420, 200],
+      "credentials": {
+        "httpQueryAuth": {
+          "id": "meta-graph-api-credentials",
+          "name": "Meta Graph API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const allItems = $input.all();\nconst containerIds = [];\n\nfor (const item of allItems) {\n  if (item.json.id) {\n    containerIds.push(item.json.id);\n  }\n}\n\nconst firstItem = $('Split for Upload').first().json;\n\nreturn [{\n  json: {\n    containerIds: containerIds,\n    containerCount: containerIds.length,\n    finalCaption: firstItem.finalCaption,\n    searchQuery: firstItem.searchQuery,\n    todayDate: firstItem.todayDate,\n    recentThemes: firstItem.recentThemes\n  }\n}];"
+      },
+      "id": "collect-ids-013",
+      "name": "Collect Container IDs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2640, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-all-containers",
+              "leftValue": "={{ $json.containerCount }}",
+              "rightValue": 9,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "verify-uploads-014",
+      "name": "All Uploads OK",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2860, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v18.0/{{ $env.INSTAGRAM_BUSINESS_ACCOUNT_ID }}/media",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "media_type",
+              "value": "CAROUSEL"
+            },
+            {
+              "name": "caption",
+              "value": "={{ $json.finalCaption }}"
+            },
+            {
+              "name": "children",
+              "value": "={{ $json.containerIds.join(',') }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "create-carousel-015",
+      "name": "Create Carousel",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3080, 100],
+      "credentials": {
+        "httpQueryAuth": {
+          "id": "meta-graph-api-credentials",
+          "name": "Meta Graph API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 15,
+        "unit": "seconds"
+      },
+      "id": "wait-016",
+      "name": "Wait Processing",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [3300, 100],
+      "webhookId": "wait-carousel-processing"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v18.0/{{ $env.INSTAGRAM_BUSINESS_ACCOUNT_ID }}/media_publish",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "creation_id",
+              "value": "={{ $('Create Carousel').item.json.id }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "publish-017",
+      "name": "Publish Post",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3520, 100],
+      "credentials": {
+        "httpQueryAuth": {
+          "id": "meta-graph-api-credentials",
+          "name": "Meta Graph API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const publishResult = $input.first().json;\nconst carouselData = $('All Uploads OK').first().json;\n\nconst newTheme = {\n  theme: carouselData.searchQuery,\n  date: carouselData.todayDate,\n  postId: publishResult.id || 'unknown'\n};\n\nconst existingThemes = carouselData.recentThemes || [];\nconst updatedThemes = [...existingThemes, newTheme].slice(-30);\n\nreturn [{\n  json: {\n    themes: updatedThemes,\n    latestTheme: newTheme,\n    postId: publishResult.id,\n    success: true\n  }\n}];"
+      },
+      "id": "prepare-memory-018",
+      "name": "Prepare Memory Update",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3740, 100]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ $env.THEME_MEMORY_URL || 'https://your-storage.com/theme-memory.json' }}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "themes",
+              "value": "={{ $json.themes }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "save-memory-019",
+      "name": "Save Theme Memory",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3960, 100]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "final-status",
+              "name": "status",
+              "value": "success",
+              "type": "string"
+            },
+            {
+              "id": "final-post-id",
+              "name": "postId",
+              "value": "={{ $('Prepare Memory Update').first().json.postId }}",
+              "type": "string"
+            },
+            {
+              "id": "final-theme",
+              "name": "theme",
+              "value": "={{ $('Prepare Memory Update').first().json.latestTheme.theme }}",
+              "type": "string"
+            },
+            {
+              "id": "final-date",
+              "name": "date",
+              "value": "={{ $('Prepare Memory Update').first().json.latestTheme.date }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "success-output-020",
+      "name": "Success Output",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [4180, 100]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "fail-status",
+              "name": "status",
+              "value": "failed",
+              "type": "string"
+            },
+            {
+              "id": "fail-reason",
+              "name": "reason",
+              "value": "Not enough valid images found",
+              "type": "string"
+            },
+            {
+              "id": "fail-query",
+              "name": "attemptedQuery",
+              "value": "={{ $json.searchQuery }}",
+              "type": "string"
+            },
+            {
+              "id": "fail-found",
+              "name": "imagesFound",
+              "value": "={{ $json.totalFound }}",
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fail-images-021",
+      "name": "Fail - Not Enough Images",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1760, 400]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "fail-upload-status",
+              "name": "status",
+              "value": "failed",
+              "type": "string"
+            },
+            {
+              "id": "fail-upload-reason",
+              "name": "reason",
+              "value": "Some images failed to upload",
+              "type": "string"
+            },
+            {
+              "id": "fail-upload-count",
+              "name": "uploadedCount",
+              "value": "={{ $json.containerCount }}",
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fail-upload-022",
+      "name": "Fail - Upload Error",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [3080, 300]
+    },
+    {
+      "parameters": {},
+      "id": "error-trigger-023",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [0, 600]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "error-status",
+              "name": "status",
+              "value": "error",
+              "type": "string"
+            },
+            {
+              "id": "error-node",
+              "name": "failedNode",
+              "value": "={{ $json.execution.error.node.name }}",
+              "type": "string"
+            },
+            {
+              "id": "error-message",
+              "name": "errorMessage",
+              "value": "={{ $json.execution.error.message }}",
+              "type": "string"
+            },
+            {
+              "id": "error-time",
+              "name": "timestamp",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "error-output-024",
+      "name": "Error Output",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 600]
+    }
+  ],
+  "connections": {
+    "Daily Schedule": {
+      "main": [
+        [
+          {
+            "node": "Fetch Theme Memory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Theme Memory": {
+      "main": [
+        [
+          {
+            "node": "Parse Theme Memory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Theme Memory": {
+      "main": [
+        [
+          {
+            "node": "Generate Daily Theme",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Daily Theme": {
+      "main": [
+        [
+          {
+            "node": "Clean Search Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clean Search Query": {
+      "main": [
+        [
+          {
+            "node": "Search Unsplash",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Unsplash": {
+      "main": [
+        [
+          {
+            "node": "Select 9 Images",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select 9 Images": {
+      "main": [
+        [
+          {
+            "node": "Has 9 Images",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has 9 Images": {
+      "main": [
+        [
+          {
+            "node": "Generate Caption",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fail - Not Enough Images",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Caption": {
+      "main": [
+        [
+          {
+            "node": "Format Caption",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Caption": {
+      "main": [
+        [
+          {
+            "node": "Split for Upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split for Upload": {
+      "main": [
+        [
+          {
+            "node": "Upload Carousel Item",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload Carousel Item": {
+      "main": [
+        [
+          {
+            "node": "Collect Container IDs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect Container IDs": {
+      "main": [
+        [
+          {
+            "node": "All Uploads OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "All Uploads OK": {
+      "main": [
+        [
+          {
+            "node": "Create Carousel",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fail - Upload Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Carousel": {
+      "main": [
+        [
+          {
+            "node": "Wait Processing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Processing": {
+      "main": [
+        [
+          {
+            "node": "Publish Post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Publish Post": {
+      "main": [
+        [
+          {
+            "node": "Prepare Memory Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Memory Update": {
+      "main": [
+        [
+          {
+            "node": "Save Theme Memory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Theme Memory": {
+      "main": [
+        [
+          {
+            "node": "Success Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Error Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "versionId": "1"
+}

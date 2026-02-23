@@ -1,0 +1,788 @@
+{
+  "name": "HVAC AI Email Outreach Automation",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger-001",
+      "name": "Daily Trigger (9 AM Weekdays)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 500],
+      "notes": "Runs every weekday at 9 AM to start the email campaign"
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.GOOGLE_SHEETS_DOC_ID }}",
+          "mode": "id",
+          "cachedResultName": "HVAC Client Database"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "={{ $env.GOOGLE_SHEETS_SHEET_NAME || 'Clients' }}",
+          "mode": "name",
+          "cachedResultName": "Clients"
+        },
+        "options": {
+          "range": ""
+        }
+      },
+      "id": "read-clients-002",
+      "name": "Read Client Database",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [220, 500],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-oauth2",
+          "name": "Google Sheets OAuth2"
+        }
+      },
+      "notes": "Reads all client data from Google Sheets including: First Name, Business Name, Email, Status"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Filter clients who haven't been contacted yet\n// Expected columns: firstName, businessName, email, emailStatus, lastContactDate\n\nconst items = $input.all();\nconst unsent = [];\n\nfor (const item of items) {\n  const status = (item.json.emailStatus || '').toString().toLowerCase().trim();\n  const email = (item.json.email || '').toString().trim();\n  const firstName = (item.json.firstName || '').toString().trim();\n  const businessName = (item.json.businessName || item.json.companyName || '').toString().trim();\n  \n  // Only include if:\n  // 1. Email is present and valid format\n  // 2. Status is NOT 'sent' or 'contacted'\n  // 3. Has required data (firstName and businessName)\n  \n  const emailRegex = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;\n  const isValidEmail = emailRegex.test(email);\n  const isNotSent = !['sent', 'contacted', 'completed'].includes(status);\n  const hasRequiredData = firstName && businessName;\n  \n  if (isValidEmail && isNotSent && hasRequiredData) {\n    unsent.push({\n      json: {\n        firstName: firstName,\n        businessName: businessName,\n        email: email,\n        rowIndex: item.json.rowIndex || unsent.length + 2, // +2 for header row and 1-based index\n        originalStatus: status || 'pending'\n      }\n    });\n  }\n}\n\n// Limit to 150 emails per day as requested\nconst dailyLimit = 150;\nconst toSend = unsent.slice(0, dailyLimit);\n\nconsole.log(`Total unsent clients: ${unsent.length}`);\nconsole.log(`Sending to ${toSend.length} clients today`);\n\nreturn toSend;"
+      },
+      "id": "filter-unsent-003",
+      "name": "Filter Unsent Clients (Max 150)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 500],
+      "notes": "Filters clients who haven't been contacted and limits to 150 per day"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-clients",
+              "leftValue": "={{ $json.email }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-has-clients-004",
+      "name": "Has Clients to Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [660, 500],
+      "notes": "Ensures there are clients to email before proceeding"
+    },
+    {
+      "parameters": {
+        "batchSize": 10,
+        "options": {}
+      },
+      "id": "split-batches-005",
+      "name": "Split into Batches of 10",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [880, 400],
+      "notes": "Processes clients in batches to avoid rate limits and improve reliability"
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "options": {
+          "temperature": 0.85,
+          "maxTokens": 500
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=You are a professional business email writer specializing in HVAC industry outreach. Your task is to write personalized, compelling cold emails that:\n\n1. Are conversational and warm, not salesy\n2. Address the recipient by their first name\n3. Reference their specific business name naturally\n4. Highlight how AI services can help HVAC businesses with:\n   - Lead response automation\n   - Appointment scheduling\n   - Customer service chatbots\n   - Follow-up automation\n   - Service reminders\n5. Include a soft call-to-action (not pushy)\n6. Keep it concise (under 150 words)\n7. Sound genuine and human, not like a template\n\nWrite the email body only (no subject line). Use a friendly, professional tone.",
+              "role": "system"
+            },
+            {
+              "content": "=Write a personalized email to:\nFirst Name: {{ $json.firstName }}\nBusiness Name: {{ $json.businessName }}\n\nMake it unique and conversational. Vary the structure and approach from typical templates.",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "ai-personalize-006",
+      "name": "AI Personalize Email Content",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.4,
+      "position": [1100, 400],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-api-credentials",
+          "name": "OpenAI API"
+        }
+      },
+      "notes": "Uses GPT-4 to generate personalized email content for each client"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "email-body",
+              "name": "emailBody",
+              "value": "={{ $json.message.content }}",
+              "type": "string"
+            },
+            {
+              "id": "preserve-firstname",
+              "name": "firstName",
+              "value": "={{ $('Split into Batches of 10').item.json.firstName }}",
+              "type": "string"
+            },
+            {
+              "id": "preserve-business",
+              "name": "businessName",
+              "value": "={{ $('Split into Batches of 10').item.json.businessName }}",
+              "type": "string"
+            },
+            {
+              "id": "preserve-email",
+              "name": "email",
+              "value": "={{ $('Split into Batches of 10').item.json.email }}",
+              "type": "string"
+            },
+            {
+              "id": "preserve-row",
+              "name": "rowIndex",
+              "value": "={{ $('Split into Batches of 10').item.json.rowIndex }}",
+              "type": "number"
+            },
+            {
+              "id": "subject-line",
+              "name": "subject",
+              "value": "=Quick question about {{ $('Split into Batches of 10').item.json.businessName }}",
+              "type": "string"
+            },
+            {
+              "id": "timestamp",
+              "name": "sentAt",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "prepare-email-007",
+      "name": "Prepare Email Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1320, 400],
+      "notes": "Formats the AI-generated content with email metadata"
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $env.SENDER_EMAIL }}",
+        "toEmail": "={{ $json.email }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "=<!DOCTYPE html>\n<html>\n<head>\n  <style>\n    body {\n      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;\n      line-height: 1.6;\n      color: #333;\n      max-width: 600px;\n      margin: 0 auto;\n      padding: 20px;\n    }\n    .email-content {\n      background: #ffffff;\n      padding: 30px;\n      border-radius: 8px;\n    }\n    .signature {\n      margin-top: 30px;\n      padding-top: 20px;\n      border-top: 2px solid #f0f0f0;\n      color: #666;\n    }\n    .footer {\n      margin-top: 30px;\n      padding-top: 20px;\n      border-top: 1px solid #e0e0e0;\n      font-size: 12px;\n      color: #888;\n    }\n    a {\n      color: #0066cc;\n      text-decoration: none;\n    }\n  </style>\n</head>\n<body>\n  <div class=\"email-content\">\n    <p>{{ $json.emailBody }}</p>\n    \n    <div class=\"signature\">\n      <p>Best regards,<br>\n      {{ $env.SENDER_NAME || 'Your Name' }}<br>\n      {{ $env.COMPANY_NAME || 'Your Company' }}<br>\n      {{ $env.SENDER_PHONE || '' }}<br>\n      <a href=\"mailto:{{ $env.SENDER_EMAIL }}\">{{ $env.SENDER_EMAIL }}</a></p>\n    </div>\n    \n    <div class=\"footer\">\n      <p>If you'd prefer not to receive emails like this, please let me know and I'll remove you from my list.</p>\n    </div>\n  </div>\n</body>\n</html>",
+        "options": {
+          "allowUnauthorizedCerts": false
+        }
+      },
+      "id": "send-email-008",
+      "name": "Send Personalized Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1540, 400],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-credentials",
+          "name": "SMTP Account"
+        }
+      },
+      "notes": "Sends the personalized email via SMTP"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "success-flag",
+              "name": "emailSent",
+              "value": true,
+              "type": "boolean"
+            },
+            {
+              "id": "preserve-row-2",
+              "name": "rowIndex",
+              "value": "={{ $('Prepare Email Data').item.json.rowIndex }}",
+              "type": "number"
+            },
+            {
+              "id": "new-status",
+              "name": "newStatus",
+              "value": "sent",
+              "type": "string"
+            },
+            {
+              "id": "sent-timestamp",
+              "name": "sentAt",
+              "value": "={{ $('Prepare Email Data').item.json.sentAt }}",
+              "type": "string"
+            },
+            {
+              "id": "preserve-email-2",
+              "name": "email",
+              "value": "={{ $('Prepare Email Data').item.json.email }}",
+              "type": "string"
+            },
+            {
+              "id": "preserve-firstname-2",
+              "name": "firstName",
+              "value": "={{ $('Prepare Email Data').item.json.firstName }}",
+              "type": "string"
+            },
+            {
+              "id": "preserve-business-2",
+              "name": "businessName",
+              "value": "={{ $('Prepare Email Data').item.json.businessName }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "mark-success-009",
+      "name": "Mark as Sent",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1760, 400],
+      "notes": "Prepares data to update the Google Sheet with sent status"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.GOOGLE_SHEETS_DOC_ID }}",
+          "mode": "id",
+          "cachedResultName": "HVAC Client Database"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "={{ $env.GOOGLE_SHEETS_SHEET_NAME || 'Clients' }}",
+          "mode": "name",
+          "cachedResultName": "Clients"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "emailStatus": "={{ $json.newStatus }}",
+            "lastContactDate": "={{ $json.sentAt }}"
+          },
+          "matchingColumns": [
+            "email"
+          ],
+          "schema": [
+            {
+              "id": "email",
+              "displayName": "email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "emailStatus",
+              "displayName": "emailStatus",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "lastContactDate",
+              "displayName": "lastContactDate",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "update-sheet-010",
+      "name": "Update Sheet Status to Sent",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [1980, 400],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-oauth2",
+          "name": "Google Sheets OAuth2"
+        }
+      },
+      "notes": "Updates the Google Sheet to mark the client as contacted"
+    },
+    {
+      "parameters": {
+        "amount": 2,
+        "unit": "seconds"
+      },
+      "id": "wait-011",
+      "name": "Wait 2 Seconds",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [2200, 400],
+      "webhookId": "",
+      "notes": "Adds delay between emails to avoid triggering spam filters"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "batch-complete",
+              "leftValue": "={{ $('Split into Batches of 10').context.noItemsLeft }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-batches-012",
+      "name": "More Batches?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2420, 400],
+      "notes": "Checks if there are more clients to process"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.GOOGLE_SHEETS_DOC_ID }}",
+          "mode": "id",
+          "cachedResultName": "HVAC Client Database"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "={{ $env.LOG_SHEET_NAME || 'EmailLog' }}",
+          "mode": "name",
+          "cachedResultName": "EmailLog"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "timestamp": "={{ $now.toISO() }}",
+            "emailsSent": "={{ $runIndex + 1 }}",
+            "totalProcessed": "={{ $('Split into Batches of 10').context.currentRunIndex + 1 }}",
+            "status": "completed"
+          },
+          "schema": [
+            {
+              "id": "timestamp",
+              "displayName": "timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "emailsSent",
+              "displayName": "emailsSent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "totalProcessed",
+              "displayName": "totalProcessed",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "log-completion-013",
+      "name": "Log Campaign Completion",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [2640, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-oauth2",
+          "name": "Google Sheets OAuth2"
+        }
+      },
+      "notes": "Logs the completion of the email campaign"
+    },
+    {
+      "parameters": {},
+      "id": "no-clients-014",
+      "name": "No Clients to Email Today",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [880, 600],
+      "notes": "Workflow ends here if no clients need to be contacted"
+    },
+    {
+      "parameters": {},
+      "id": "error-trigger-015",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [0, 900]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "error-message",
+              "name": "errorMessage",
+              "value": "={{ $json.error.message }}",
+              "type": "string"
+            },
+            {
+              "id": "error-node",
+              "name": "errorNode",
+              "value": "={{ $json.error.node?.name || 'Unknown' }}",
+              "type": "string"
+            },
+            {
+              "id": "error-time",
+              "name": "errorTime",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            },
+            {
+              "id": "workflow-name",
+              "name": "workflowName",
+              "value": "HVAC AI Email Outreach",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "format-error-016",
+      "name": "Format Error Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 900]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.GOOGLE_SHEETS_DOC_ID }}",
+          "mode": "id",
+          "cachedResultName": "HVAC Client Database"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "={{ $env.ERROR_LOG_SHEET_NAME || 'ErrorLog' }}",
+          "mode": "name",
+          "cachedResultName": "ErrorLog"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "timestamp": "={{ $json.errorTime }}",
+            "workflow": "={{ $json.workflowName }}",
+            "errorNode": "={{ $json.errorNode }}",
+            "errorMessage": "={{ $json.errorMessage }}"
+          },
+          "schema": [
+            {
+              "id": "timestamp",
+              "displayName": "timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "workflow",
+              "displayName": "workflow",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "errorNode",
+              "displayName": "errorNode",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "errorMessage",
+              "displayName": "errorMessage",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "log-error-017",
+      "name": "Log Error to Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [440, 900],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-oauth2",
+          "name": "Google Sheets OAuth2"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Daily Trigger (9 AM Weekdays)": {
+      "main": [
+        [
+          {
+            "node": "Read Client Database",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Client Database": {
+      "main": [
+        [
+          {
+            "node": "Filter Unsent Clients (Max 150)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Unsent Clients (Max 150)": {
+      "main": [
+        [
+          {
+            "node": "Has Clients to Email?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Clients to Email?": {
+      "main": [
+        [
+          {
+            "node": "Split into Batches of 10",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Clients to Email Today",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split into Batches of 10": {
+      "main": [
+        [
+          {
+            "node": "AI Personalize Email Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Personalize Email Content": {
+      "main": [
+        [
+          {
+            "node": "Prepare Email Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Email Data": {
+      "main": [
+        [
+          {
+            "node": "Send Personalized Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Personalized Email": {
+      "main": [
+        [
+          {
+            "node": "Mark as Sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark as Sent": {
+      "main": [
+        [
+          {
+            "node": "Update Sheet Status to Sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Sheet Status to Sent": {
+      "main": [
+        [
+          {
+            "node": "Wait 2 Seconds",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 2 Seconds": {
+      "main": [
+        [
+          {
+            "node": "More Batches?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "More Batches?": {
+      "main": [
+        [
+          {
+            "node": "Split into Batches of 10",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Campaign Completion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Format Error Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Error Data": {
+      "main": [
+        [
+          {
+            "node": "Log Error to Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "createdAt": "2026-02-23T11:50:00.000Z",
+      "updatedAt": "2026-02-23T11:50:00.000Z",
+      "id": "hvac-outreach",
+      "name": "HVAC Outreach"
+    }
+  ],
+  "triggerCount": 2,
+  "updatedAt": "2026-02-23T11:50:00.000Z",
+  "versionId": "1"
+}
